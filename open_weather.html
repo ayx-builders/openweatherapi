@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html style="padding:20px">
+<head>
+  <meta charset="utf-8">
+  <title>Open Weather</title>
+  <script type="text/javascript">
+    document.write('<link rel="import" href="' + window.Alteryx.LibDir + '2/lib/includes.html">');
+  </script>
+</head>
+<body>
+  <form>
+    <fieldset>
+      <legend class='blueTitle'>XMSG("Open Weather")</legend>
+      <div class=''>
+        <label>XMSG("OpenWeather Key:")</label>
+		<ayx data-ui-props="{type: 'TextBox', password: true}" data-item-props="{dataName: 'Key', dataType: 'SimpleString', password: true, encryptionMode: 'user'}"></ayx>
+        <label>XMSG("Latitude:")</label>
+		<ayx data-ui-props="{type: 'TextBox'}" data-item-props="{dataName: 'Latitude', dataType: 'SimpleString'}"></ayx>
+        <label>XMSG("Longitude:")</label>
+		<ayx data-ui-props="{type: 'TextBox'}" data-item-props="{dataName: 'Longitude', dataType: 'SimpleString'}"></ayx>
+        <label>XMSG("Endpoint:")</label>
+		<ayx data-ui-props="{type: 'DropDown'}" data-item-props="{dataName: 'Endpoint', dataType: 'StringSelector', optionList: ['Current','Hourly Forecast','Daily Forecast']}"></ayx>
+      </div>
+    </fieldset>
+  </form>
+</body>
+</html>

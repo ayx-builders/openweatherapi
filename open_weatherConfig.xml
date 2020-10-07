@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<AlteryxJavaScriptPlugin>
+  <EngineSettings EngineDll="Python" EngineDllEntryPoint="open_weather.py" SDKVersion="10.1" />
+  <GuiSettings Html="open_weather.html" Icon="open_weather.png" Help="" SDKVersion="10.1">
+    <InputConnections>
+    </InputConnections>
+    <OutputConnections>
+      <Connection Name="Output" AllowMultiple="False" Optional="False" Type="Connection" Label=""/>
+    </OutputConnections>
+  </GuiSettings>
+  <Properties>
+    <MetaInfo>
+      <Name>Open Weather</Name>
+      <Description>Download current weather conditions, hourly forecasts, and daily forecasts from the OpenWeather API.</Description>
+      <CategoryName>ayx_builders</CategoryName>
+      <SearchTags>python, sdk, weather, openweather</SearchTags>
+      <ToolVersion>1.00</ToolVersion>
+      <Author>tlarsendataguy, nick612haylund</Author>
+      <Company></Company>
+      <Copyright>2020</Copyright>
+    </MetaInfo>
+  </Properties>
+</AlteryxJavaScriptPlugin>
