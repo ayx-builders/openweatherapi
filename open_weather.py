@@ -1,5 +1,10 @@
+import datetime
+import json
+
 import AlteryxPythonSDK as Sdk
 import xml.etree.ElementTree as Et
+import requests
+from obj_query import AyxDataMap, FieldType, Query
 
 
 class AyxPlugin:
@@ -15,6 +20,7 @@ class AyxPlugin:
         self.Lon: float = None
         self.Lat: float = None
         self.Endpoint: str = None
+        self.Units: str = None
 
     def pi_init(self, str_xml: str):
         xml_parser = Et.fromstring(str_xml)
@@ -32,10 +38,16 @@ class AyxPlugin:
             self.display_error_msg('Latitude is not a valid number')
         self.Lat = lat_float
 
+        units = self.parse_tag(xml_parser, 'Units', False)
+        if units is None:
+            self.display_error_msg('Units was not selected')
+        self.Units = units
+
         self.Endpoint = self.parse_tag(xml_parser, 'Endpoint', True)
 
         # Getting the output anchor from Config.xml by the output connection name
         self.Output = self.output_anchor_mgr.get_output_anchor('Output')
+        self.WeatherConditionCodes = self.output_anchor_mgr.get_output_anchor('Weather Condition Codes')
 
     def pi_add_incoming_connection(self, str_type: str, str_name: str) -> object:
         raise NotImplementedError('unexpected; this is an input tool')
@@ -44,8 +56,46 @@ class AyxPlugin:
         return True
 
     def pi_push_all_records(self, n_record_limit: int) -> bool:
+        data_mapper = AyxDataMap(self.alteryx_engine, self.label, {
+            ("Temperature", FieldType.Decimal): Query().get('main').get('temp').finalize(),
+            ("Feels Like", FieldType.Decimal): Query().get('main').get('feels_like').finalize(),
+            ("Min Temperature", FieldType.Decimal): Query().get('main').get('temp_min').finalize(),
+            ("Max Temperature", FieldType.Decimal): Query().get('main').get('temp_max').finalize(),
+            ("Atmospheric Pressure", FieldType.Integer): Query().get('main').get('pressure').finalize(),
+            ("Humidity", FieldType.Integer): Query().get('main').get('humidity').finalize(),
+            ("Visibility", FieldType.Integer): Query().get('visibility').finalize(),
+            ("Wind Speed", FieldType.Decimal): Query().get('wind').get('speed').finalize(),
+            ("Wind Direction", FieldType.Decimal): Query().get('wind').get('deg').finalize(),
+            ("Percentage of Cloudiness", FieldType.Decimal): Query().get('clouds').get('all').custom(divide_by_hundred).finalize(),
+            ("Timestamp", FieldType.Datetime): Query().get('dt').custom(unix_timestamp_to_datetime).finalize(),
+            ("Sunrise", FieldType.Datetime): Query().get('sys').get('sunrise').custom(unix_timestamp_to_datetime).finalize(),
+            ("Sunset", FieldType.Datetime): Query().get('sys').get('sunset').custom(unix_timestamp_to_datetime).finalize(),
+            ("TZ Shift", FieldType.Integer): Query().get('timezone').finalize(),
+            ("City ID", FieldType.Integer): Query().get('id').finalize(),
+            ("City Name", FieldType.String): Query().get('name').finalize(),
+        })
 
-        return False
+        info = data_mapper.Info
+        self.Output.init(info)
+
+        if self.alteryx_engine.get_init_var(self.n_tool_id, 'UpdateOnly') == 'True':
+            self.Output.close()
+            return True
+
+
+        api_key = self.alteryx_engine.decrypt_password(self.ApiKey)
+        url = f"https://api.openweathermap.org/data/2.5/weather?lat={self.Lat}&lon={self.Lon}&appid={api_key}&units={self.Units}"
+        response = requests.get(url)
+        if response.status_code != 200:
+            self.display_error_msg(response.text)
+            return False
+
+        response_obj = json.loads(response.text)
+        blob = data_mapper.transfer(response_obj)
+        self.Output.push_record(blob)
+        self.Output.close()
+
+        return True
 
     def pi_close(self, b_has_errors: bool):
         return
@@ -71,3 +121,10 @@ def string_to_float(value_str):
     except:
         return None
 
+
+def unix_timestamp_to_datetime(value):
+    return datetime.datetime(1970, 1, 1) + datetime.timedelta(seconds=value)
+
+
+def divide_by_hundred(value):
+    return value/100

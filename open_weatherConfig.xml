@@ -6,6 +6,7 @@
     </InputConnections>
     <OutputConnections>
       <Connection Name="Output" AllowMultiple="False" Optional="False" Type="Connection" Label=""/>
+      <Connection Name="Weather Condition Codes" AllowMultiple="False" Optional="False" Type="Connection" Label="C"/>
     </OutputConnections>
   </GuiSettings>
   <Properties>
