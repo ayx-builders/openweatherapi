@@ -56,6 +56,13 @@ class AyxPlugin:
         return True
 
     def pi_push_all_records(self, n_record_limit: int) -> bool:
+        if self.Endpoint == 'Current':
+            return self.import_current_forecast()
+
+        self.display_error_msg(f"Unsupported endpoint {self.Endpoint}")
+        return False
+
+    def import_current_forecast(self) -> bool:
         data_mapper = AyxDataMap(self.alteryx_engine, self.label, {
             ("Temperature", FieldType.Decimal): Query().get('main').get('temp').finalize(),
             ("Feels Like", FieldType.Decimal): Query().get('main').get('feels_like').finalize(),
@@ -75,13 +82,21 @@ class AyxPlugin:
             ("City Name", FieldType.String): Query().get('name').finalize(),
         })
 
+        condition_code_mapper = AyxDataMap(self.alteryx_engine, self.label, {
+            ("Condition ID", FieldType.Integer): Query().get('id').finalize(),
+            ("Condition Name", FieldType.String): Query().get('main').finalize(),
+            ("Condition Description", FieldType.String): Query().get('description').finalize(),
+            ("Condition Icon", FieldType.String): Query().get('icon').custom(icon_to_url).finalize(),
+        })
+
         info = data_mapper.Info
         self.Output.init(info)
+        condition_code_info = condition_code_mapper.Info
+        self.WeatherConditionCodes.init(condition_code_info)
 
         if self.alteryx_engine.get_init_var(self.n_tool_id, 'UpdateOnly') == 'True':
             self.Output.close()
             return True
-
 
         api_key = self.alteryx_engine.decrypt_password(self.ApiKey)
         url = f"https://api.openweathermap.org/data/2.5/weather?lat={self.Lat}&lon={self.Lon}&appid={api_key}&units={self.Units}"
@@ -93,7 +108,13 @@ class AyxPlugin:
         response_obj = json.loads(response.text)
         blob = data_mapper.transfer(response_obj)
         self.Output.push_record(blob)
+
+        for condition_code in response_obj['weather']:
+            condition_code_blob = condition_code_mapper.transfer(condition_code)
+            self.WeatherConditionCodes.push_record(condition_code_blob)
+
         self.Output.close()
+        self.WeatherConditionCodes.close()
 
         return True
 
@@ -128,3 +149,7 @@ def unix_timestamp_to_datetime(value):
 
 def divide_by_hundred(value):
     return value/100
+
+
+def icon_to_url(value):
+    return f"http://openweathermap.org/img/wn/{value}@2x.png"
