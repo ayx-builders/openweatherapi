@@ -7,6 +7,34 @@ import requests
 from obj_query import AyxDataMap, FieldType, Query
 
 
+class ForecastKeyData:
+    def __init__(self):
+        self.CityId = None
+        self.CityName = None
+        self.Timestamp = None
+        self.Sunrise = None
+        self.Sunset = None
+        self.TzShift = None
+
+    def get_city_id(self, _):
+        return self.CityId
+
+    def get_city_name(self, _):
+        return self.CityName
+
+    def get_timestamp(self, _):
+        return self.Timestamp
+
+    def get_sunrise(self, _):
+        return self.Sunrise
+
+    def get_sunset(self, _):
+        return self.Sunset
+
+    def get_tz_shift(self, _):
+        return self.TzShift
+
+
 class AyxPlugin:
     def __init__(self, n_tool_id: int, alteryx_engine: object, output_anchor_mgr: object):
         # Default properties
@@ -57,22 +85,106 @@ class AyxPlugin:
 
     def pi_push_all_records(self, n_record_limit: int) -> bool:
         if self.Endpoint == 'Current':
-            return self.import_current_forecast()
+            return self.import_current_weather()
+        if self.Endpoint == 'Forecast':
+            return self.import_forecast()
 
         self.display_error_msg(f"Unsupported endpoint {self.Endpoint}")
         return False
 
-    def import_current_forecast(self) -> bool:
+    def import_forecast(self) -> bool:
+        forecast_keys = ForecastKeyData()
+
         data_mapper = AyxDataMap(self.alteryx_engine, self.label, {
             ("Temperature", FieldType.Decimal): Query().get('main').get('temp').finalize(),
             ("Feels Like", FieldType.Decimal): Query().get('main').get('feels_like').finalize(),
             ("Min Temperature", FieldType.Decimal): Query().get('main').get('temp_min').finalize(),
             ("Max Temperature", FieldType.Decimal): Query().get('main').get('temp_max').finalize(),
-            ("Atmospheric Pressure", FieldType.Integer): Query().get('main').get('pressure').finalize(),
+            ("Atmospheric Pressure", FieldType.Decimal): Query().get('main').get('pressure').custom(self.to_inHg_if_imperial).finalize(),
             ("Humidity", FieldType.Integer): Query().get('main').get('humidity').finalize(),
             ("Visibility", FieldType.Integer): Query().get('visibility').finalize(),
             ("Wind Speed", FieldType.Decimal): Query().get('wind').get('speed').finalize(),
             ("Wind Direction", FieldType.Decimal): Query().get('wind').get('deg').finalize(),
+            ("Wind Gust", FieldType.Decimal): Query().get('wind').get('gust').finalize(),
+            ("Rain Last 1 Hr", FieldType.Decimal): Query().get('rain').get('1h').custom(self.to_in_if_imperial).finalize(),
+            ("Rain Last 3 Hr", FieldType.Decimal): Query().get('rain').get('3h').custom(self.to_in_if_imperial).finalize(),
+            ("Snow Last 1 Hr", FieldType.Decimal): Query().get('snow').get('1h').custom(self.to_in_if_imperial).finalize(),
+            ("Snow Last 3 Hr", FieldType.Decimal): Query().get('snow').get('3h').custom(self.to_in_if_imperial).finalize(),
+            ("Percentage of Cloudiness", FieldType.Decimal): Query().get('clouds').get('all').custom(divide_by_hundred).finalize(),
+            ("Timestamp", FieldType.Datetime): Query().custom(forecast_keys.get_timestamp).custom(unix_timestamp_to_datetime).finalize(),
+            ("Sunrise", FieldType.Datetime): Query().custom(forecast_keys.get_sunrise).custom(unix_timestamp_to_datetime).finalize(),
+            ("Sunset", FieldType.Datetime): Query().custom(forecast_keys.get_sunset).custom(unix_timestamp_to_datetime).finalize(),
+            ("TZ Shift", FieldType.Integer): Query().custom(forecast_keys.get_tz_shift).finalize(),
+            ("City ID", FieldType.Integer): Query().custom(forecast_keys.get_city_id).finalize(),
+            ("City Name", FieldType.String): Query().custom(forecast_keys.get_city_name).finalize(),
+        })
+
+        condition_code_mapper = AyxDataMap(self.alteryx_engine, self.label, {
+            ("City ID", FieldType.Integer): Query().custom(forecast_keys.get_city_id).finalize(),
+            ("Timestamp", FieldType.Datetime): Query().custom(forecast_keys.get_timestamp).custom(unix_timestamp_to_datetime).finalize(),
+            ("Condition ID", FieldType.Integer): Query().get('id').finalize(),
+            ("Condition Name", FieldType.String): Query().get('main').finalize(),
+            ("Condition Description", FieldType.String): Query().get('description').finalize(),
+            ("Condition Icon", FieldType.String): Query().get('icon').custom(icon_to_url).finalize(),
+        })
+
+        info = data_mapper.Info
+        self.Output.init(info)
+        condition_code_info = condition_code_mapper.Info
+        self.WeatherConditionCodes.init(condition_code_info)
+
+        if self.alteryx_engine.get_init_var(self.n_tool_id, 'UpdateOnly') == 'True':
+            self.Output.close()
+            return True
+
+        api_key = self.alteryx_engine.decrypt_password(self.ApiKey)
+        url = f"https://api.openweathermap.org/data/2.5/forecast?lat={self.Lat}&lon={self.Lon}&appid={api_key}&units={self.Units}"
+        response = requests.get(url)
+        if response.status_code != 200:
+            self.display_error_msg(response.text)
+            return False
+
+        response_obj = json.loads(response.text)
+        forecasts = Query().get('list').finalize().get_from(response_obj)
+        forecast_keys.CityId = Query().get('city').get('id').finalize().get_from(response_obj)
+        forecast_keys.CityName = Query().get('city').get('name').finalize().get_from(response_obj)
+        forecast_keys.Sunrise = Query().get('city').get('sunrise').finalize().get_from(response_obj)
+        forecast_keys.Sunset = Query().get('city').get('sunset').finalize().get_from(response_obj)
+        forecast_keys.TzShift = Query().get('city').get('timezone').finalize().get_from(response_obj)
+
+        get_timestamp = Query().get('dt').finalize()
+
+        for forecast in forecasts:
+            forecast_keys.Timestamp = get_timestamp.get_from(forecast)
+
+            blob = data_mapper.transfer(forecast)
+            self.Output.push_record(blob)
+
+            for condition_code in forecast['weather']:
+                condition_code_blob = condition_code_mapper.transfer(condition_code)
+                self.WeatherConditionCodes.push_record(condition_code_blob)
+
+        self.Output.close()
+        self.WeatherConditionCodes.close()
+
+        return True
+
+    def import_current_weather(self) -> bool:
+        data_mapper = AyxDataMap(self.alteryx_engine, self.label, {
+            ("Temperature", FieldType.Decimal): Query().get('main').get('temp').finalize(),
+            ("Feels Like", FieldType.Decimal): Query().get('main').get('feels_like').finalize(),
+            ("Min Temperature", FieldType.Decimal): Query().get('main').get('temp_min').finalize(),
+            ("Max Temperature", FieldType.Decimal): Query().get('main').get('temp_max').finalize(),
+            ("Atmospheric Pressure", FieldType.Decimal): Query().get('main').get('pressure').custom(self.to_inHg_if_imperial).finalize(),
+            ("Humidity", FieldType.Integer): Query().get('main').get('humidity').finalize(),
+            ("Visibility", FieldType.Integer): Query().get('visibility').finalize(),
+            ("Wind Speed", FieldType.Decimal): Query().get('wind').get('speed').finalize(),
+            ("Wind Direction", FieldType.Decimal): Query().get('wind').get('deg').finalize(),
+            ("Wind Gust", FieldType.Decimal): Query().get('wind').get('gust').finalize(),
+            ("Rain Last 1 Hr", FieldType.Decimal): Query().get('rain').get('1h').custom(self.to_in_if_imperial).finalize(),
+            ("Rain Last 3 Hr", FieldType.Decimal): Query().get('rain').get('3h').custom(self.to_in_if_imperial).finalize(),
+            ("Snow Last 1 Hr", FieldType.Decimal): Query().get('snow').get('1h').custom(self.to_in_if_imperial).finalize(),
+            ("Snow Last 3 Hr", FieldType.Decimal): Query().get('snow').get('3h').custom(self.to_in_if_imperial).finalize(),
             ("Percentage of Cloudiness", FieldType.Decimal): Query().get('clouds').get('all').custom(divide_by_hundred).finalize(),
             ("Timestamp", FieldType.Datetime): Query().get('dt').custom(unix_timestamp_to_datetime).finalize(),
             ("Sunrise", FieldType.Datetime): Query().get('sys').get('sunrise').custom(unix_timestamp_to_datetime).finalize(),
@@ -134,6 +246,20 @@ class AyxPlugin:
         if is_required:
             self.display_error_msg(f"Missing {tag_name}")
         return None
+
+    def to_in_if_imperial(self, value):
+        if value is None:
+            return None
+        if self.Units == 'imperial':
+            return value / 25.4
+        return value
+
+    def to_inHg_if_imperial(self, value):
+        if value is None:
+            return None
+        if self.Units == 'imperial':
+            return value * 0.02953
+        return value
 
 
 def string_to_float(value_str):
