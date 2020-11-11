@@ -94,6 +94,7 @@ class AyxPlugin:
 
     def import_forecast(self) -> bool:
         forecast_keys = ForecastKeyData()
+        current_timestamp = {"timestamp": datetime.datetime.now()}
 
         data_mapper = AyxDataMap(self.alteryx_engine, self.label, {
             ("Temperature", FieldType.Decimal): Query().get('main').get('temp').finalize(),
@@ -117,6 +118,7 @@ class AyxPlugin:
             ("TZ Shift", FieldType.Integer): Query().custom(forecast_keys.get_tz_shift).finalize(),
             ("City ID", FieldType.Integer): Query().custom(forecast_keys.get_city_id).finalize(),
             ("City Name", FieldType.String): Query().custom(forecast_keys.get_city_name).finalize(),
+            ("Time of Forecast", FieldType.Datetime): Query().custom(lambda _: current_timestamp['timestamp']).finalize(),
         })
 
         condition_code_mapper = AyxDataMap(self.alteryx_engine, self.label, {
@@ -170,6 +172,9 @@ class AyxPlugin:
         return True
 
     def import_current_weather(self) -> bool:
+        city_id_query = Query().get('id').finalize()
+        timestamp_query = Query().get('dt').custom(unix_timestamp_to_datetime).finalize()
+
         data_mapper = AyxDataMap(self.alteryx_engine, self.label, {
             ("Temperature", FieldType.Decimal): Query().get('main').get('temp').finalize(),
             ("Feels Like", FieldType.Decimal): Query().get('main').get('feels_like').finalize(),
@@ -186,15 +191,19 @@ class AyxPlugin:
             ("Snow Last 1 Hr", FieldType.Decimal): Query().get('snow').get('1h').custom(self.to_in_if_imperial).finalize(),
             ("Snow Last 3 Hr", FieldType.Decimal): Query().get('snow').get('3h').custom(self.to_in_if_imperial).finalize(),
             ("Percentage of Cloudiness", FieldType.Decimal): Query().get('clouds').get('all').custom(divide_by_hundred).finalize(),
-            ("Timestamp", FieldType.Datetime): Query().get('dt').custom(unix_timestamp_to_datetime).finalize(),
+            ("Timestamp", FieldType.Datetime): timestamp_query,
             ("Sunrise", FieldType.Datetime): Query().get('sys').get('sunrise').custom(unix_timestamp_to_datetime).finalize(),
             ("Sunset", FieldType.Datetime): Query().get('sys').get('sunset').custom(unix_timestamp_to_datetime).finalize(),
             ("TZ Shift", FieldType.Integer): Query().get('timezone').finalize(),
-            ("City ID", FieldType.Integer): Query().get('id').finalize(),
+            ("City ID", FieldType.Integer): city_id_query,
             ("City Name", FieldType.String): Query().get('name').finalize(),
         })
 
+        observation_key = {"CityId": 0, "Timestamp": None}
+
         condition_code_mapper = AyxDataMap(self.alteryx_engine, self.label, {
+            ("City ID", FieldType.Integer): Query().custom(lambda _: observation_key['CityId']).finalize(),
+            ("Timestamp", FieldType.Datetime): Query().custom(lambda _: observation_key['Timestamp']).finalize(),
             ("Condition ID", FieldType.Integer): Query().get('id').finalize(),
             ("Condition Name", FieldType.String): Query().get('main').finalize(),
             ("Condition Description", FieldType.String): Query().get('description').finalize(),
@@ -220,6 +229,9 @@ class AyxPlugin:
         response_obj = json.loads(response.text)
         blob = data_mapper.transfer(response_obj)
         self.Output.push_record(blob)
+
+        observation_key['CityId'] = city_id_query.get_from(response_obj)
+        observation_key['Timestamp'] = timestamp_query.get_from(response_obj)
 
         for condition_code in response_obj['weather']:
             condition_code_blob = condition_code_mapper.transfer(condition_code)
